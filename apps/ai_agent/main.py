@@ -90,6 +90,15 @@ def _openai_client():
     return OpenAI(api_key=api_key)
 
 
+def _weaviate_client():
+    """Open a Weaviate connection using WEAVIATE_HOST / _HTTP_PORT / _GRPC_PORT."""
+    return weaviate.connect_to_local(
+        host=os.environ.get("WEAVIATE_HOST", "localhost"),
+        port=int(os.environ.get("WEAVIATE_HTTP_PORT", "8080")),
+        grpc_port=int(os.environ.get("WEAVIATE_GRPC_PORT", "50051")),
+    )
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
@@ -212,7 +221,7 @@ def summarise_proposal(request: ProposalSummariseRequest):
 def index_message(request: IndexMessageRequest):
     try:
         # Attempt connection to Weaviate
-        client = weaviate.connect_to_local()
+        client = _weaviate_client()
     except Exception:
         raise HTTPException(status_code=503, detail="Weaviate connection failed")
 
@@ -261,7 +270,7 @@ def index_message(request: IndexMessageRequest):
 @app.get("/search")
 def search_messages(q: str, conversationId: str):
     try:
-        client = weaviate.connect_to_local()
+        client = _weaviate_client()
     except Exception:
         raise HTTPException(status_code=503, detail="Weaviate connection failed")
 
