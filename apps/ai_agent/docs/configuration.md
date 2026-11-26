@@ -183,38 +183,19 @@ container itself.
 
 ### Failure mode when Weaviate is unreachable
 
-Both Weaviate-backed endpoints wrap the connection in `try/except` and translate
-any failure to **503**:
-
-```python
-try:
-    client = weaviate.connect_to_local()
-except Exception:
-    raise HTTPException(status_code=503, detail="Weaviate connection failed")
-```
+Both Weaviate-backed endpoints log unexpected connection and operation failures
+and return fixed **503** responses. They preserve existing `HTTPException` responses.
 
 | Condition                                 | Response                                                                                                                         |
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | Weaviate down / unreachable               | **503** `{"detail": "Weaviate connection failed"}`                                                                               |
-| Weaviate up, later operation fails        | **503** with the underlying exception text as `detail` — the second `except Exception as e` block re-raises as 503 with `str(e)` |
+| Weaviate up, later operation fails        | **503** `{"detail": "Search backend unavailable"}` for unexpected exceptions                                         |
 | Weaviate up, `Message` collection missing | `GET /search` → **200** `{"results": []}`; `POST /index/message` creates the collection and proceeds                             |
-| Weaviate up, `OPENAI_API_KEY` missing     | **500** — the embedding call fails after the connection succeeds                                                                 |
+| Weaviate up, `OPENAI_API_KEY` missing     | **500** `{"detail": "OPENAI_API_KEY is not configured"}`                                                           |
 
-Two points that matter operationally:
-
-- **`/health` does not check Weaviate either.** A deployment with no Weaviate
-  reachable is green on its liveness probe and serves 503s on `/search` and
-  `/index/message`, exactly as with a missing API key. Chat and proposal
-  summarisation are unaffected.
-- **The 503 detail can leak internals.** The second handler passes `str(e)`
-  straight into the response body, so a client can see raw client-library error
-  text. Treat that as an internal-facing detail, not a stable contract.
-
-`apps/ai_agent/tests/test_search.py::test_weaviate_connection_failure_returns_503`
-pins the 503 behaviour, and `test_missing_collection_returns_empty_results` pins
-the empty-result path, including that no query is issued. Note that the
-equivalent failure on `POST /index/message` has no test of its own — the coverage
-is on the `/search` side only.
+`/health` reports process liveness. Check the service logs for connection,
+operation, and cleanup failures. `apps/ai_agent/tests/test_error_details.py`
+covers error responses for both endpoints.
 
 ### Collection schema
 

@@ -8,7 +8,7 @@ All commands run from `apps/ai_agent`.
 
 ```bash
 # install dev dependencies (pytest, pytest-mock, pytest-cov, httpx)
-uv sync --extra dev
+uv sync --group dev
 
 # run everything
 uv run pytest
@@ -383,28 +383,13 @@ This is the single largest coverage gap in the service, and it is a good first c
 | Existing message (upsert path) | `collection.data.exists.return_value = True` | `collection.data.replace` called; `insert` not called |
 | Correct embedding model | any success path | `embeddings.create` called with `model="text-embedding-3-small"` |
 | Properties written correctly | any success path | `properties` carries `messageId`, `conversationId`, `senderId`, `content`; `uuid` is `messageId` |
-| Mid-operation failure | make `data.insert` raise | `503` with the stringified exception as `detail` |
+| Mid-operation failure | make `data.insert` raise | `503` with `{"detail": "Search backend unavailable"}` |
 | Connection always closed | any path, success or failure | `mock_weaviate.return_value.close.assert_called_once()` |
 | Missing required field | post a body without `content` | `422` |
-| Missing API key | `monkeypatch.delenv("OPENAI_API_KEY", ...)` | **`503`**, not `500` — see below |
+| Missing API key | `monkeypatch.delenv("OPENAI_API_KEY", ...)` | `500` with `{"detail": "OPENAI_API_KEY is not configured"}` |
 
-Watch the last row: it is the one case here that does not behave the way the other endpoints do. `_openai_client()` raises `HTTPException(500, ...)`, but on this endpoint that call sits inside the `try` whose `except Exception as e` re-raises everything as `503`, with the original message carried through as `detail`. The assertion to write is:
-
-```python
-def test_missing_api_key_returns_503(monkeypatch, mock_weaviate, client):
-    """The broad except on this endpoint remaps the helper's 500 to a 503."""
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    mock_weaviate.return_value.collections.exists.return_value = True
-
-    response = client.post("/index/message", json=_BODY)
-
-    assert response.status_code == 503
-    assert "OPENAI_API_KEY" in response.json()["detail"]
-```
-
-`GET /search` has the identical structure and the identical behaviour.
-
-The `close()` assertion is worth including on both a success and a failure case — it is the only guard against a Weaviate outage leaking connections, and it is currently unverified. See [operations.md](operations.md#the-weaviate-dependency) for the connection lifecycle this protects.
+`tests/test_error_details.py` exercises both endpoints and checks that cleanup
+preserves the response. See [the connection lifecycle](operations.md#the-weaviate-dependency).
 
 ## Related documents
 
