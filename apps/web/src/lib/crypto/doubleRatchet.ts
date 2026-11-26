@@ -5,9 +5,12 @@
  * MAX_SKIPPED_KEYS overall) so a message that arrives late can still be
  * decrypted instead of being rejected outright.
  *
- * `ratchetSession.ts` is a separate, IndexedDB-backed session layer that
- * predates this and does NOT support out-of-order delivery. The two are not
- * yet wired together — see the note in that file.
+ * Session persistence and the app wiring are deliberately separate concerns:
+ * the earlier IndexedDB-backed `ratchetSession.ts` prototype (P-256 ECDH, its
+ * own envelope format, and no skipped-key handling) was removed because it
+ * duplicated these primitives with an incompatible design. The live send path
+ * is still the Phase-1 sealed box; see the Signal migration notes in
+ * `docs/signal-integration.md` and `docs/adr/0005-sealed-box-to-signal-migration.md`.
  */
 import { x25519 } from '@noble/curves/ed25519';
 import { hkdf } from '@noble/hashes/hkdf';

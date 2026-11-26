@@ -35,8 +35,9 @@ points at the module that implements it.
   per-session symmetric-key ratchet combined with a DH ratchet, giving
   forward secrecy and post-compromise security for one-to-one sessions.
   Implemented in `apps/web/src/lib/crypto/doubleRatchet.ts` (`ratchetEncrypt`
-  / `ratchetDecrypt`), with the persisted session layer in
-  `apps/web/src/lib/crypto/ratchetSession.ts` / `signalSession.ts`.
+  / `ratchetDecrypt`); `apps/web/src/lib/signalSession.ts` holds the per-device
+  chains seeded by X3DH. Both are implemented but not on the live path — see
+  [`crypto-module-map.md`](../apps/web/docs/crypto-module-map.md).
 
 - **Safety number** — A human-verifiable fingerprint computed from both
   parties' identity keys, used to detect key/identity changes (aka "safety

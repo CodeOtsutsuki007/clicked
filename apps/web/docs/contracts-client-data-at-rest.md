@@ -38,7 +38,6 @@ The following table itemizes every client-side storage location across all stora
 | **IndexedDB** (`clicked_sessions`) | `sessions` | Established X3DH session records keyed by `sessionId` or `peerDeviceId`. Holds unencrypted `sessionKey` JWK (AES-GCM shared secret) and counter metadata. | **Private Key / Symmetric Key** (Unencrypted JWK) | [`src/lib/sessionStore.ts`](../src/lib/sessionStore.ts) |
 | **IndexedDB** (`clicked_messages`) | `messages` | Local offline message cache. Contains encrypted message envelopes (`encryptedContent`, `iv`, `conversationId`, `timestamp`). Encrypted via AES-GCM with PBKDF2 key derived from identity key. | **Plaintext** (Application-layer encrypted) | [`src/lib/messageCache.ts`](../src/lib/messageCache.ts) *(historical / inactive)* |
 | **IndexedDB** (`clicked-search`) | `messages` | Decrypted message records (`id`, `conversationId`, `senderId`, `content`, `createdAt`) used to build local full-text search index. | **Plaintext** (Decrypted message content) | [`src/lib/search/db.ts`](../src/lib/search/db.ts) |
-| **IndexedDB** (`driptide-crypto`) | `double-ratchet-sessions` | Double Ratchet session state: `sessionId`, `rootKey`, `sendChainKey`, `receiveChainKey`, `sendingPrivateKey`, `sendingPublicKey`, `remotePublicKey`. | **Private Key / Symmetric Key** | [`src/lib/crypto/ratchetSession.ts`](../src/lib/crypto/ratchetSession.ts) |
 | **Service Worker Cache** | *(None)* | The service worker (`public/sw.js`) registers **no** cache storage and intercepts no `fetch` requests. `caches.open()` is not invoked. | **Non-sensitive** (Empty) | [`public/sw.js`](../../public/sw.js) |
 
 ---
@@ -86,8 +85,13 @@ The web application opens several IndexedDB databases:
 2. **`clicked_prekeys`** (Version 1): X3DH signed and one-time prekey pool. Holds unencrypted private key JWKs.
 3. **`clicked_sessions`** (Version 1): Established shared secrets for Phase-1 sealed-box encryption. Holds unencrypted AES-GCM JWKs.
 4. **`clicked-search`** (Version 1): Local search database. Stores fully decrypted plaintext messages in store `messages` to allow client-side full-text search.
-5. **`driptide-crypto`** (Version 1): Double Ratchet session persistence. Stores root keys, chain keys, and sending private keys in store `double-ratchet-sessions`.
-6. **`clicked_messages`** (Version 1, *historical/inactive*): Local encrypted message store using AES-GCM derived via PBKDF2 from identity key material.
+5. **`clicked_messages`** (Version 1, *historical/inactive*): Local encrypted message store using AES-GCM derived via PBKDF2 from identity key material.
+
+The former `driptide-crypto` database (store `double-ratchet-sessions`) is no
+longer opened by the web app: it was only used by the removed
+`lib/crypto/ratchetSession.ts` prototype. Nothing in the current code deletes
+that database from browsers that already created it; clearing it requires the
+browser's site-data controls.
 
 ### 3.5 Service Worker Cache
 
@@ -135,7 +139,7 @@ The following data items **survive logout and device revocation**, representing 
 | :--- | :--- | :--- | :--- |
 | **Decrypted Search Index** | IndexedDB (`clicked-search`) | **Plaintext** | Never purged on `signOut()`. Plaintext message content from previous conversations remains readable in IndexedDB by anyone with physical access to the browser or via XSS. |
 | **Cryptographic Identity Keys** | IndexedDB (`clicked_crypto`) | **Private Key** | The ECDH P-256 identity keypair and device ID survive logout. If another user signs in on the same browser profile, they inherit or share the previous device's identity keys. |
-| **Prekey & Session Stores** | IndexedDB (`clicked_prekeys`, `clicked_sessions`, `driptide-crypto`) | **Private Key / Symmetric Key** | Unencrypted private prekeys, ratchet states, and session keys survive logout. |
+| **Prekey & Session Stores** | IndexedDB (`clicked_prekeys`, `clicked_sessions`) | **Private Key / Symmetric Key** | Unencrypted private prekeys and session keys survive logout. |
 | **Device ID & Public Key** | `localStorage` (`clicked.e2eeDeviceId`, `clicked.deviceIdentityPublicKey`, `clicked.e2eDeviceId`) | **Metadata / Public Key** | Survives logout. A new sign-in will reuse the existing device ID and Ed25519 public key rather than provisioning a fresh device identity. |
 | **Identity Trust Pins** | `localStorage` (`clicked.identityTrust.${userId}`) | **Metadata** | TOFU peer identity pins remain stored after sign out. |
 | **Safety Number Verifications** | `localStorage` (`clicked.safetyVerification.${userId}`) | **Metadata** | Manual safety verification records remain stored after sign out. |
