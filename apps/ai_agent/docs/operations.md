@@ -62,17 +62,7 @@ Because there is no shared state between requests, worker count can be changed f
 | Variable         | Required by                                            | Behaviour when absent                        |
 | ---------------- | ------------------------------------------------------ | -------------------------------------------- |
 | `OPENAI_API_KEY` | `/chat`, `/transfers/analyse`, `/proposals/summarise` | Those endpoints return `500`. `/health` still returns `200`. |
-| `OPENAI_API_KEY` | `/index/message`, `/search` | Those endpoints return **`503`**, not `500` — see the note below. |
-
-**The two Weaviate endpoints report a missing API key as `503`, even when Weaviate is healthy.** `_openai_client()` raises `HTTPException(500, ...)` as usual, but on `/index/message` and `/search` the embedding call sits inside a `try` block whose `except Exception as e` catches the `HTTPException` and re-raises it as a `503`, folding the original message into the detail. The observed response is:
-
-```
-503  {"detail": "500: OPENAI_API_KEY is not configured"}
-```
-
-The operational consequence: **a `503` from these two endpoints does not reliably mean Weaviate is down.** It may equally be an OpenAI misconfiguration. Read the `detail` string before concluding which dependency has failed — the `"500: "` prefix is the tell.
-
-> **Correction.** [configuration.md](configuration.md#3-startup-and-missing-api-key-behaviour) states that these endpoints return `500` when Weaviate is reachable and only `503` when it is unreachable. That is not the observed behaviour: the broad `except Exception` catches `HTTPException` too, so the response is `503` in **both** cases. This was verified by exercising both endpoints with a mocked-healthy Weaviate and the key removed. The `503` is not a signal about which dependency failed.
+| `OPENAI_API_KEY` | `/index/message`, `/search` | Requests that reach the embedding step return `500` with `{"detail": "OPENAI_API_KEY is not configured"}`. |
 
 The key is read **per request** inside `_openai_client()`, not once at import time:
 
@@ -136,27 +126,14 @@ Do **not** configure `/health` as a `readinessProbe` if your intent is "can this
 
 Two endpoints depend on Weaviate: `POST /index/message` (writes) and `GET /search` (reads). The other three do not touch it at all.
 
-Both follow the same connect/operate/close pattern:
-
-```python
-try:
-    client = weaviate.connect_to_local()
-except Exception:
-    raise HTTPException(status_code=503, detail="Weaviate connection failed")
-
-try:
-    ...
-except Exception as e:
-    raise HTTPException(status_code=503, detail=str(e))
-finally:
-    client.close()
-```
+Both log unexpected failures and use fixed response messages. An existing
+`HTTPException` retains its status and detail.
 
 ### Connection lifecycle
 
 A **fresh Weaviate connection is opened and closed on every request**. There is no connection pool and no persistent client. `connect_to_local()` performs a startup handshake including a gRPC health check, so each request pays that setup cost. This is the single largest fixed overhead on the Weaviate path and the first thing to change if `/search` latency becomes a problem.
 
-The `finally: client.close()` guarantees the connection is released on both the success and failure paths, so a Weaviate outage does not leak sockets.
+Both endpoints attempt to close the client after each operation. Cleanup failures are logged and the operation's response is preserved.
 
 ### Behaviour when Weaviate is down
 
@@ -164,8 +141,8 @@ The `finally: client.close()` guarantees the connection is released on both the 
 | --------------------------------------------- | ---------------- | -------------------------------------------------------- |
 | Weaviate unreachable (connect fails)          | `/index/message` | `503` — `{"detail": "Weaviate connection failed"}`       |
 | Weaviate unreachable (connect fails)          | `/search`        | `503` — `{"detail": "Weaviate connection failed"}`       |
-| Connects, then fails mid-operation            | `/index/message` | `503` — `detail` is the stringified exception            |
-| Connects, then fails mid-operation            | `/search`        | `503` — `detail` is the stringified exception            |
+| Connects, then an unexpected error occurs     | `/index/message` | `503` — `{"detail": "Search backend unavailable"}`        |
+| Connects, then an unexpected error occurs     | `/search`        | `503` — `{"detail": "Search backend unavailable"}`        |
 | Connects, `Message` collection does not exist | `/search`        | `200` — `{"results": []}`                                |
 | Connects, `Message` collection does not exist | `/index/message` | `200` — the collection is **created**, then written to   |
 
@@ -175,13 +152,11 @@ Two asymmetries are worth internalising:
 
 **`/index/message` creates the collection on demand.** The first successful index call after a fresh Weaviate deployment implicitly creates `Message`. There is no separate schema migration step to run, but it also means an accidental point at an empty Weaviate silently starts building a new index rather than failing loudly.
 
-**Errors are surfaced verbatim.** On the mid-operation failure path, `detail=str(e)` returns the raw exception message to the caller. Treat `503` bodies from these endpoints as internal diagnostic data and do not render them directly in a user-facing surface.
-
 ### Blast radius
 
 A Weaviate outage degrades search and indexing only. `/chat`, `/transfers/analyse`, and `/proposals/summarise` continue to serve normally because they never open a Weaviate connection. Availability of the two dependency groups should be tracked separately; a single aggregate error rate for the service will obscure which half is broken.
 
-Note that both Weaviate endpoints *also* call OpenAI, for embeddings. `/index/message` and `/search` therefore need **both** dependencies healthy — and because the embedding call happens inside the broadly-caught `try` block, an OpenAI failure on these two endpoints is also reported as `503`, not `500`. The status code alone cannot tell the two dependencies apart here; only the `detail` string can.
+Both endpoints use OpenAI for embeddings. A missing OpenAI API key produces `500`. Unexpected errors during embedding or Weaviate operations produce the same `503` response. Check the service logs to identify the failing dependency.
 
 ## Scaling characteristics
 
@@ -271,10 +246,8 @@ Recorded so they are tracked rather than rediscovered:
 | 5 | Weaviate host is not configurable | `connect_to_local()` hardcodes localhost; Weaviate must be co-located | Wire host/port to environment variables |
 | 6 | No timeout on embedding or Weaviate calls | A hung upstream holds a worker thread for up to 10 minutes | Pass explicit timeouts; bound at the proxy |
 | 7 | New `OpenAI` client and new Weaviate connection per request | Avoidable per-request setup latency | Reuse clients across requests via app lifespan |
-| 8 | `503` bodies leak raw exception text | Internal detail exposed to callers | Log the exception; return a generic message |
-| 8a | The broad `except Exception` on both Weaviate endpoints swallows `HTTPException`, remapping a `500` to a `503` | A missing API key is indistinguishable from a Weaviate outage by status code | Re-raise `HTTPException` unchanged; catch only Weaviate errors |
-| 9 | `/search` returns `200` `{"results": []}` when the collection is missing | An unindexed corpus is indistinguishable from no matches | Distinguish the two states in the response |
-| 10 | No `max_tokens` and no input size cap | Per-call cost is unbounded | Set `max_tokens`; validate input length |
+| 8 | `/search` returns `200` `{"results": []}` when the collection is missing | An unindexed corpus is indistinguishable from no matches | Distinguish the two states in the response |
+| 9 | No explicit `max_tokens` | Model defaults govern output length | Set an explicit output token limit |
 
 ## Related documents
 

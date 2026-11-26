@@ -20,6 +20,17 @@ jobs:
     name: Ciphertext-only guard + secret-field scan
     runs-on: ubuntu-latest
 
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
     defaults:
       run:
         working-directory: apps/backend
@@ -41,7 +52,7 @@ jobs:
         working-directory: .
 
       - name: Run security regression tests
-        run: pnpm test -- security.regression.test.ts
+        run: pnpm exec vitest run src/__tests__/security.regression.test.ts
         env:
           JWT_SECRET: ci-test-secret
           REDIS_URL: redis://localhost:6379

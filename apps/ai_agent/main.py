@@ -1,11 +1,12 @@
 import json
+import logging
 import os
 from typing import Literal, cast
 
 import uvicorn
 import weaviate
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 from weaviate.classes.query import Filter
 
 try:
@@ -17,6 +18,8 @@ except ImportError:  # pragma: no cover - exercised when the dependency is absen
 
 OPENAI_CHAT_MODEL = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
 OPENAI_EMBEDDING_MODEL = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AI Agent API")
 
@@ -30,13 +33,19 @@ _SYSTEM_PROMPT = (
 
 _HIGH_VALUE_THRESHOLD = 10_000.0
 
+# Input limits. Free text is forwarded to paid OpenAI calls, so cap its size.
+MAX_TEXT_LEN = 4_000
+MAX_SHORT_TEXT_LEN = 200
+
+_SEARCH_UNAVAILABLE = "Search backend unavailable"
+
 
 # ── Request / response models ─────────────────────────────────────────────────
 
 
 class ChatRequest(BaseModel):
-    message: str
-    conversation_id: str
+    message: str = Field(min_length=1, max_length=MAX_TEXT_LEN)
+    conversation_id: str = Field(min_length=1, max_length=MAX_SHORT_TEXT_LEN)
 
 
 class ChatResponse(BaseModel):
@@ -44,10 +53,10 @@ class ChatResponse(BaseModel):
 
 
 class TransferAnalyseRequest(BaseModel):
-    amount: float
-    sender: str
-    recipient: str
-    memo: str
+    amount: float = Field(gt=0, allow_inf_nan=False)
+    sender: str = Field(min_length=1, max_length=MAX_SHORT_TEXT_LEN)
+    recipient: str = Field(min_length=1, max_length=MAX_SHORT_TEXT_LEN)
+    memo: str = Field(max_length=MAX_SHORT_TEXT_LEN)
 
 
 class TransferAnalyseResponse(BaseModel):
@@ -57,19 +66,19 @@ class TransferAnalyseResponse(BaseModel):
 
 
 class IndexMessageRequest(BaseModel):
-    messageId: str
-    conversationId: str
-    senderId: str
-    content: str
+    messageId: str = Field(min_length=1, max_length=MAX_SHORT_TEXT_LEN)
+    conversationId: str = Field(min_length=1, max_length=MAX_SHORT_TEXT_LEN)
+    senderId: str = Field(min_length=1, max_length=MAX_SHORT_TEXT_LEN)
+    content: str = Field(min_length=1, max_length=MAX_TEXT_LEN)
 
 
 RiskLevel = Literal["low", "medium", "high"]
 
 
 class ProposalSummariseRequest(BaseModel):
-    title: str
-    description: str
-    amount: float
+    title: str = Field(min_length=1, max_length=MAX_SHORT_TEXT_LEN)
+    description: str = Field(min_length=1, max_length=MAX_TEXT_LEN)
+    amount: float = Field(gt=0, allow_inf_nan=False)
 
 
 class ProposalSummariseResponse(BaseModel):
@@ -90,13 +99,22 @@ def _openai_client():
     return OpenAI(api_key=api_key)
 
 
-def _weaviate_client():
-    """Open a Weaviate connection using WEAVIATE_HOST / _HTTP_PORT / _GRPC_PORT."""
-    return weaviate.connect_to_local(
-        host=os.environ.get("WEAVIATE_HOST", "localhost"),
-        port=int(os.environ.get("WEAVIATE_HTTP_PORT", "8080")),
-        grpc_port=int(os.environ.get("WEAVIATE_GRPC_PORT", "50051")),
-    )
+def _connect_search_backend() -> weaviate.WeaviateClient:
+    try:
+        return weaviate.connect_to_local()
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Weaviate connection failed")
+        raise HTTPException(status_code=503, detail="Weaviate connection failed")
+
+
+def _close_search_backend(client: weaviate.WeaviateClient) -> None:
+    try:
+        client.close()
+    except Exception:
+        # A cleanup failure must not hide the operation's response or cause a write retry.
+        logger.exception("Closing Weaviate connection failed")
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -112,7 +130,7 @@ def chat(request: ChatRequest):
     client = _openai_client()
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_CHAT_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": request.message},
@@ -219,11 +237,7 @@ def summarise_proposal(request: ProposalSummariseRequest):
 
 @app.post("/index/message")
 def index_message(request: IndexMessageRequest):
-    try:
-        # Attempt connection to Weaviate
-        client = _weaviate_client()
-    except Exception:
-        raise HTTPException(status_code=503, detail="Weaviate connection failed")
+    client = _connect_search_backend()
 
     try:
         if not client.collections.exists("Message"):
@@ -259,20 +273,23 @@ def index_message(request: IndexMessageRequest):
                 },
                 vector=vector,
             )
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Indexing message failed")
+        raise HTTPException(status_code=503, detail=_SEARCH_UNAVAILABLE)
     finally:
-        client.close()
+        _close_search_backend(client)
 
     return {"status": "ok"}
 
 
 @app.get("/search")
-def search_messages(q: str, conversationId: str):
-    try:
-        client = _weaviate_client()
-    except Exception:
-        raise HTTPException(status_code=503, detail="Weaviate connection failed")
+def search_messages(
+    q: str = Query(min_length=1, max_length=MAX_TEXT_LEN),
+    conversationId: str = Query(min_length=1, max_length=MAX_SHORT_TEXT_LEN),
+):
+    client = _connect_search_backend()
 
     try:
         if not client.collections.exists("Message"):
@@ -303,10 +320,13 @@ def search_messages(q: str, conversationId: str):
             )
 
         return {"results": hits}
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Message search failed")
+        raise HTTPException(status_code=503, detail=_SEARCH_UNAVAILABLE)
     finally:
-        client.close()
+        _close_search_backend(client)
 
 
 if __name__ == "__main__":

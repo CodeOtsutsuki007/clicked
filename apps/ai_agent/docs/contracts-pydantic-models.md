@@ -23,7 +23,7 @@ The agent's reply to a chat request.
 
 Payload for requesting fraud risk analysis on a Stellar transfer.
 
-- `amount` (`float`): The transfer amount in XLM. Must be a valid float.
+- `amount` (`float`): The transfer amount in XLM. Must be finite and greater than zero.
 - `sender` (`str`): The Stellar address of the sender. Must be a valid string.
 - `recipient` (`str`): The Stellar address of the recipient. Must be a valid string.
 - `memo` (`str`): The memo string attached to the transaction. Must be a valid string.
@@ -55,7 +55,7 @@ Payload for generating a frontend-friendly summary and risk assessment for a DAO
 
 - `title` (`str`): The title of the proposal. Must be a valid string.
 - `description` (`str`): The full text description of the proposal. Must be a valid string.
-- `amount` (`float`): The funding amount requested in XLM. Must be a valid float.
+- `amount` (`float`): The funding amount requested in XLM. Must be finite and greater than zero.
 
 ### `ProposalSummariseResponse`
 

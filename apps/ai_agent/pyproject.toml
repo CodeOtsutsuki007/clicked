@@ -1,7 +1,7 @@
 [project]
 name = "ai-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "FastAPI service providing AI chat, transfer risk analysis, proposal summaries and message search for Clicked"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,18 +9,6 @@ dependencies = [
     "uvicorn>=0.42.0",
     "openai>=1.0.0",
     "weaviate-client>=4.0.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0.0",
-    "httpx>=0.27.0",
-    "pytest-mock>=3.14.0",
-    "pytest-cov>=5.0.0",
-    "pip-audit>=2.7",
-    "ruff>=0.4",
-    "mypy>=1.10",
-    "types-requests",
 ]
 
 [dependency-groups]

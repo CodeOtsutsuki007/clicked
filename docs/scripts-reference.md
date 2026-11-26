@@ -188,7 +188,7 @@ effect of merging code. As noted [above](#root-makefile), the root `Makefile`'s
 (which has its own copies) or `apps/web` (which has neither `express` nor `supertest` as
 a real dependency at all). These root-level packages are what let the orphaned
 Express-style files described in
-[`known-limitations.md`](./known-limitations.md#register) (entry 6: `cacheService.js`,
+[`known-limitations.md`](./known-limitations.md#register) (entry 5: `cacheService.js`,
 `routes/conversations.js`, and their test) resolve their imports locally without
 actually being part of any real, buildable app — a contributor could run `node` against
 one of those files directly and have its `require`/`import` of `express` succeed, which

@@ -16,6 +16,7 @@ choice) is included.
 - [Double Ratchet: `kdfRk` and `kdfCk`](#double-ratchet-kdfrk-and-kdfck)
 - [Skipped-key limits](#skipped-key-limits)
 - [Deviations from the Signal specs](#deviations-from-the-signal-specs)
+- [Session-layer status](#session-layer-status)
 - [Test vectors](#test-vectors)
 - [Implementation references](#implementation-references)
 
@@ -243,6 +244,32 @@ No deviation found in this review *weakens* a security property the spec require
 (signature verification, domain separation, the `MAX_SKIP` DoS guard, and AD construction
 all match). The deviations above are either spec-permitted choices or additional
 hardening beyond what the spec mandates.
+
+## Session-layer status
+
+`doubleRatchet.ts` provides the ratchet primitives; it is not, by itself, a
+persisted session layer. An earlier `apps/web/src/lib/crypto/ratchetSession.ts`
+offered IndexedDB-backed sessions, but it used P-256 ECDH and its own JSON
+envelope format rather than the X25519/X3DH inputs used here, and it threw
+`Out-of-order ratchet messages are not supported` whenever a receive counter
+was skipped. It had no importers in `apps/web/src` and no test coverage, so
+issue #681 resolved it by deleting it rather than wiring a second,
+incompatible session format into the app.
+
+The Signal groundwork follows a different route: `lib/x3dh.ts` establishes
+per-device sessions in `lib/signalSession.ts`, which `lib/signalClient.ts`
+exposes behind the `SessionCrypto` interface. `signalSession.ts` uses its own
+symmetric hash ratchet and does **not** call `doubleRatchet.ts`, so these
+primitives are currently exercised only by tests. None of that Signal path is
+live: `lib/session.ts` exports `Phase1SessionCrypto` as `defaultSession`, but
+the running send/receive path calls `lib/crypto.ts` and
+`lib/crypto/decrypt.ts` directly. See [crypto-module-map.md](./crypto-module-map.md)
+for the wiring status and
+[`docs/adr/0005-sealed-box-to-signal-migration.md`](../../../docs/adr/0005-sealed-box-to-signal-migration.md)
+for the migration plan. What issue #681 changes is the duplicate session layer
+that *did* drop late messages: with `ratchetSession.ts` gone, the only ratchet
+implementation left is the one whose `MKSKIPPED` tracking is described above,
+which decrypts out-of-order messages instead of silently discarding them.
 
 ## Test vectors
 
